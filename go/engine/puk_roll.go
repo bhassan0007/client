@@ -152,6 +152,24 @@ func (e *PerUserKeyRoll) inner(ctx *Context) error {
 		len(pukBoxes), pukPrev != nil, gen)
 	libkb.AddPerUserKeyServerArg(payload, gen, pukBoxes, pukPrev)
 
+	ekLib := e.G().GetEKLib()
+	var myUserEKBox *keybase1.UserEkBoxed
+	var newUserEKMetadata *keybase1.UserEkMetadata
+	if ekLib != nil && ekLib.ShouldRun(ctx.NetContext) {
+		signingKey, err := pukSeed.DeriveSigningKey()
+		if err != nil {
+			return err
+		}
+		merkleRoot, err := e.G().GetMerkleClient().FetchRootFromServer(ctx.NetContext, libkb.EphemeralKeyMerkleFreshness)
+		sig, boxes, newMetadata, myBox, err := ekLib.PrepareNewUserEKForPUK(ctx.NetContext, *merkleRoot, signingKey)
+		myUserEKBox = myBox
+		newUserEKMetadata = &newMetadata
+		userEKSection := make(libkb.JSONPayload)
+		userEKSection["sig"] = sig
+		userEKSection["boxes"] = boxes
+		payload["user_ek"] = userEKSection
+	}
+
 	e.G().Log.CDebugf(ctx.GetNetContext(), "PerUserKeyRoll post")
 	_, err = e.G().API.PostJSON(libkb.APIArg{
 		Endpoint:    "key/multi",
@@ -167,6 +185,11 @@ func (e *PerUserKeyRoll) inner(ctx *Context) error {
 	err = pukring.AddKey(ctx.GetNetContext(), gen, pukSeqno, pukSeed)
 	if err != nil {
 		return err
+	}
+
+	// Add the new userEK box to local storage, if it was created above.
+	if myUserEKBox != nil {
+		e.G().GetUserEKBoxStorage().Put(ctx.NetContext, newUserEKMetadata.Generation, *myUserEKBox)
 	}
 
 	e.G().UserChanged(uid)

@@ -244,6 +244,23 @@ func (e *RevokeEngine) Run(ctx *Context) error {
 		libkb.AddPerUserKeyServerArg(payload, newPukGeneration, pukBoxes, pukPrev)
 	}
 
+	ekLib := e.G().GetEKLib()
+	var myUserEKBox *keybase1.UserEkBoxed
+	var newUserEKMetadata *keybase1.UserEkMetadata
+	if addingNewPUK && ekLib != nil && ekLib.ShouldRun(ctx.NetContext) {
+		signingKey, err := newPukSeed.DeriveSigningKey()
+		if err != nil {
+			return err
+		}
+		sig, boxes, newMetadata, myBox, err := ekLib.PrepareNewUserEKForPUK(ctx.NetContext, *merkleRoot, signingKey)
+		myUserEKBox = myBox
+		newUserEKMetadata = &newMetadata
+		userEKSection := make(libkb.JSONPayload)
+		userEKSection["sig"] = sig
+		userEKSection["boxes"] = boxes
+		payload["user_ek"] = userEKSection
+	}
+
 	_, err = e.G().API.PostJSON(libkb.APIArg{
 		Endpoint:    "key/multi",
 		SessionType: libkb.APISessionTypeREQUIRED,
@@ -258,6 +275,11 @@ func (e *RevokeEngine) Run(ctx *Context) error {
 		if err != nil {
 			return err
 		}
+	}
+
+	// Add the new userEK box to local storage, if it was created above.
+	if myUserEKBox != nil {
+		e.G().GetUserEKBoxStorage().Put(ctx.NetContext, newUserEKMetadata.Generation, *myUserEKBox)
 	}
 
 	e.G().UserChanged(me.GetUID())
